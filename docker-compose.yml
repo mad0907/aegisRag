@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: aegisrag-postgres
+    environment:
+      POSTGRES_USER: aegisrag
+      POSTGRES_PASSWORD: aegisrag
+      POSTGRES_DB: aegisrag
+    ports:
+      - "5433:5432"
+    volumes:
+      - aegisrag_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aegisrag"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    container_name: aegisrag-phoenix
+    ports:
+      - "6006:6006"   # UI
+      - "4317:4317"   # OTLP gRPC
+    volumes:
+      - aegisrag_phoenix:/mnt/data
+
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: aegisrag-openwebui
+    ports:
+      - "3000:8080"
+    environment:
+      OPENAI_API_BASE_URL: http://host.docker.internal:8080/v1
+      OPENAI_API_KEY: aegisrag-local
+      WEBUI_AUTH: "False"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - aegisrag_openwebui:/app/backend/data
+    depends_on:
+      - postgres
+      - phoenix
+
+volumes:
+  aegisrag_pgdata:
+  aegisrag_phoenix:
+  aegisrag_openwebui:

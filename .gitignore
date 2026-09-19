@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+# data/knowledge_base/*.pdf IS committed on purpose — it's the assessment's own corpus, needed
+# for `make ingest` to be reproducible from a fresh clone, and isn't sensitive (public paper).
+evaluation/results/*
+!evaluation/results/.gitkeep
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Claude Code local state — never committed
+.claude/
+CLAUDE.md
+.claude.json
+.mcp.json

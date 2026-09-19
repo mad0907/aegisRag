@@ -1,0 +1,18 @@
+# AI control plane (§21 of the design doc) — behavior knobs, not hard-coded in Python.
+max_iterations: 3
+
+retrieval:
+  min_score: 0.70
+  top_k: 6
+
+answer:
+  auto_threshold: 0.85
+  qualify_threshold: 0.60
+
+human_review:
+  enabled: true
+  confidence_threshold: 0.60
+
+fallback:
+  enabled: true
+  max_attempts: 2

@@ -1,0 +1,19 @@
+[
+  {
+    "question": "What does the document say are the two main categories of ethical issues raised by thinking machines?",
+    "ground_truth": "The document says ethical issues relate to ensuring that thinking machines do not harm humans and other morally relevant beings, and to questions about what moral status the machines themselves might have."
+  },
+  {
+    "question": "Why does the document say verifying the safety of an artificial general intelligence is a greater challenge than verifying ordinary software?",
+    "ground_truth": "Because with an AGI we must verify what the system is trying to do, not just check its behavior in all operating contexts as with ordinary software, since its local specific behavior may not be predictable even if the programmers do everything right."
+  },
+  {
+    "question": "According to the document, what criteria should be considered when designing algorithms that replace human judgment of social functions?",
+    "ground_truth": "Responsibility, transparency, auditability, incorruptibility, predictability, and a tendency not to make innocent victims suffer helpless frustration."
+  },
+  {
+    "question": "What was the CEO's salary in 2023 according to the document?",
+    "ground_truth": "This information is not present in the document.",
+    "expected_unanswerable": true
+  }
+]
