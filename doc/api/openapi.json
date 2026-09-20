@@ -140,6 +140,107 @@
                     }
                 }
             }
+        },
+        "/review-queue": {
+            "get": {
+                "summary": "Get Review Queue",
+                "operationId": "get_review_queue_review_queue_get",
+                "parameters": [
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "default": "pending",
+                            "title": "Status"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/review-queue/{review_id}/decision": {
+            "post": {
+                "summary": "Decide Review",
+                "operationId": "decide_review_review_queue__review_id__decision_post",
+                "parameters": [
+                    {
+                        "name": "review_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Review Id"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ReviewDecision"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/audit/verify": {
+            "get": {
+                "summary": "Verify Audit",
+                "operationId": "verify_audit_audit_verify_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
         }
     },
     "components": {
@@ -239,6 +340,30 @@
                 },
                 "type": "object",
                 "title": "HTTPValidationError"
+            },
+            "ReviewDecision": {
+                "properties": {
+                    "decision": {
+                        "type": "string",
+                        "title": "Decision"
+                    },
+                    "note": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Note"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "decision"
+                ],
+                "title": "ReviewDecision"
             },
             "ValidationError": {
                 "properties": {

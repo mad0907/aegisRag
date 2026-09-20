@@ -1,11 +1,11 @@
 """The five agents (§4 of the design doc) — deliberately five, not fifteen."""
-from crewai import Agent
+from crewai import LLM, Agent
 
 from aegisrag.agents.llm import get_llm
 
 
-def build_agents() -> dict[str, Agent]:
-    llm = get_llm()
+def build_agents(llm: LLM | None = None) -> dict[str, Agent]:
+    llm = llm or get_llm()
 
     planner = Agent(
         role="Query Planner",

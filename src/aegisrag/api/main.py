@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from aegisrag.agents.orchestrator import AegisRAGOrchestrator
 from aegisrag.config.settings import get_settings
 from aegisrag.database.db import get_connection
+from aegisrag.guardrails import human_review
 from aegisrag.ingestion.pipeline import ingest_directory
 from aegisrag.observability.tracing import init_tracing
 
@@ -84,6 +85,7 @@ def chat_completions(req: ChatCompletionRequest):
             "status": result.status,
             "confidence": result.confidence,
             "iterations": result.iterations,
+            "review_id": result.review_id,
         },
     }
 
@@ -178,3 +180,37 @@ def submit_feedback(fb: Feedback):
             )
         conn.commit()
     return {"status": "recorded"}
+
+
+# ---- Human-in-the-loop review queue (§17) ----------------------------------------------------
+
+@app.get("/review-queue")
+def get_review_queue(status: str = "pending"):
+    if status not in ("pending", "approved", "rejected"):
+        return JSONResponse(status_code=400, content={"error": "status must be pending|approved|rejected"})
+    return human_review.list_queue(status)
+
+
+class ReviewDecision(BaseModel):
+    decision: str  # "approved" | "rejected"
+    note: str | None = None
+
+
+@app.post("/review-queue/{review_id}/decision")
+def decide_review(review_id: str, body: ReviewDecision):
+    if body.decision not in ("approved", "rejected"):
+        return JSONResponse(status_code=400, content={"error": "decision must be approved|rejected"})
+    updated = human_review.decide(review_id, body.decision, body.note)
+    if not updated:
+        return JSONResponse(status_code=404, content={"error": "no pending review with that id"})
+    return {"review_id": review_id, "status": body.decision}
+
+
+# ---- Audit chain integrity (§19) -------------------------------------------------------------
+
+@app.get("/audit/verify")
+def verify_audit():
+    from aegisrag.audit.hashchain import verify_chain
+
+    ok, message = verify_chain()
+    return {"ok": ok, "message": message}

@@ -11,6 +11,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from aegisrag.config.control_plane import get_policy
 from aegisrag.database.db import get_connection
 
 
@@ -27,6 +28,10 @@ class AuditEvent:
     document_ids: list[str] = field(default_factory=list)
     model: str | None = None
     prompt_version: str | None = None
+    # Defaults to the currently-loaded control-plane version (config/agent_policy.yaml) if not
+    # given — every row is stamped with which policy was active, so a behavior change traces
+    # back to the run that started using it.
+    policy_version: str | None = None
     input_data: dict | None = None
     output_data: dict | None = None
 
@@ -40,6 +45,7 @@ def _get_last_event_hash(cur) -> str:
 def write_event(event: AuditEvent) -> str:
     input_hash = _hash(event.input_data or {})
     output_hash = _hash(event.output_data or {})
+    policy_version = event.policy_version or get_policy().version
     # Computed once here and stored verbatim in created_at, so verify_chain() can recompute
     # the exact same hash later from what's persisted — not an approximation.
     timestamp = datetime.now(timezone.utc)
@@ -54,6 +60,7 @@ def write_event(event: AuditEvent) -> str:
                 "document_ids": sorted(event.document_ids),
                 "model": event.model,
                 "prompt_version": event.prompt_version,
+                "policy_version": policy_version,
                 "input_hash": input_hash,
                 "output_hash": output_hash,
                 "previous_event_hash": previous_hash,
@@ -64,9 +71,9 @@ def write_event(event: AuditEvent) -> str:
             cur.execute(
                 """
                 INSERT INTO audit_log
-                    (trace_id, agent, action, document_ids, model, prompt_version,
+                    (trace_id, agent, action, document_ids, model, prompt_version, policy_version,
                      input_hash, output_hash, previous_event_hash, event_hash, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     event.trace_id,
@@ -75,6 +82,7 @@ def write_event(event: AuditEvent) -> str:
                     event.document_ids or None,
                     event.model,
                     event.prompt_version,
+                    policy_version,
                     input_hash,
                     output_hash,
                     previous_hash,
@@ -94,7 +102,8 @@ def verify_chain() -> tuple[bool, str]:
             cur.execute(
                 """
                 SELECT event_id, trace_id, agent, action, document_ids, model, prompt_version,
-                       input_hash, output_hash, previous_event_hash, event_hash, created_at
+                       policy_version, input_hash, output_hash, previous_event_hash, event_hash,
+                       created_at
                 FROM audit_log ORDER BY created_at ASC
                 """
             )
@@ -102,7 +111,7 @@ def verify_chain() -> tuple[bool, str]:
 
     prev = "GENESIS"
     for row in rows:
-        (event_id, trace_id, agent, action, document_ids, model, prompt_version,
+        (event_id, trace_id, agent, action, document_ids, model, prompt_version, policy_version,
          input_hash, output_hash, previous_event_hash, event_hash, created_at) = row
         if previous_event_hash != prev:
             return False, f"Broken link at event {event_id}: expected previous={prev}, found={previous_event_hash}"
@@ -115,6 +124,7 @@ def verify_chain() -> tuple[bool, str]:
             "document_ids": doc_ids_str,
             "model": model,
             "prompt_version": prompt_version,
+            "policy_version": policy_version,
             "input_hash": input_hash,
             "output_hash": output_hash,
             "previous_event_hash": previous_event_hash,

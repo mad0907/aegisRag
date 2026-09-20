@@ -1,4 +1,9 @@
-# AI control plane (§21 of the design doc) — behavior knobs, not hard-coded in Python.
+# AI control plane (§21 of the design doc) — the single source of truth for agent behavior.
+# Nothing here is duplicated in Python or .env; orchestrator, guardrails and the review queue
+# all read this one file through config/control_plane.py. Bump `version` on any change — it's
+# stamped onto every audit_log row so a behavior change is traceable to the run that made it.
+version: "1.1"
+
 max_iterations: 3
 
 retrieval:
@@ -12,7 +17,23 @@ answer:
 human_review:
   enabled: true
   confidence_threshold: 0.60
+  # A query touching any of these (case-insensitive substring) forces review regardless of
+  # confidence — §17 of the design doc.
+  high_risk_keywords:
+    - compliance
+    - legal
+    - approve
+    - approval
+    - policy violation
+    - regulatory
+    - audit finding
+    - terminate
+    - disciplinary
 
 fallback:
   enabled: true
   max_attempts: 2
+  # Model-level fallback (§18): a secondary, smaller model tried if the primary model errors
+  # or times out. Retrieval-only degrade (no synthesis) is the final floor below that — never
+  # an invented answer with no model available.
+  secondary_model_enabled: true

@@ -1,6 +1,5 @@
 from functools import lru_cache
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,6 +9,7 @@ class Settings(BaseSettings):
     # Ollama
     ollama_base_url: str = "http://localhost:11434"
     ollama_primary_model: str = "qwen2.5:7b-instruct"
+    ollama_fallback_model: str = "llama3.2:3b"
     ollama_embed_model: str = "nomic-embed-text"
 
     # Postgres / PGVector
@@ -27,11 +27,10 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8080
 
-    # Agent policy (§4/§21 of the design doc) — overridable via env, not hard-coded
-    agent_max_iterations: int = Field(default=3)
-    retrieval_min_score: float = Field(default=0.70)
-    answer_auto_threshold: float = Field(default=0.85)
-    answer_qualify_threshold: float = Field(default=0.60)
+    # Agent policy (max_iterations, thresholds, human-review, fallback) is NOT here — it lives
+    # solely in config/agent_policy.yaml, loaded by config/control_plane.py. This file is
+    # infrastructure config (where things are); agent_policy.yaml is behavior config (how the
+    # agents act) — the single AI control plane surface, §21 of the design doc.
 
     @property
     def postgres_dsn(self) -> str:

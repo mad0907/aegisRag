@@ -8,6 +8,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from aegisrag.config.control_plane import get_policy
+
 MAX_QUERY_CHARS = 2000
 
 # Patterns that indicate an attempt to override the system's instructions — deliberately broad;
@@ -52,11 +54,12 @@ def check_retrieved_content(passages: list[str]) -> GuardrailResult:
     return GuardrailResult(allowed=True, flagged=flagged, reason="pattern found in retrieved text" if flagged else "")
 
 
-def check_output(answer: str, confidence: float, qualify_threshold: float) -> GuardrailResult:
+def check_output(answer: str, confidence: float, qualify_threshold: float | None = None) -> GuardrailResult:
+    threshold = qualify_threshold if qualify_threshold is not None else get_policy().answer.qualify_threshold
     if not answer or not answer.strip():
         return GuardrailResult(allowed=False, reason="empty answer")
-    if confidence < qualify_threshold:
+    if confidence < threshold:
         return GuardrailResult(
-            allowed=False, reason=f"confidence {confidence:.2f} below qualify threshold {qualify_threshold}"
+            allowed=False, reason=f"confidence {confidence:.2f} below qualify threshold {threshold}"
         )
     return GuardrailResult(allowed=True)

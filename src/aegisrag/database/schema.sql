@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
     document_ids          UUID[],
     model                  TEXT,
     prompt_version        TEXT,
+    policy_version        TEXT,
     input_hash             TEXT,
     output_hash            TEXT,
     previous_event_hash   TEXT,
@@ -49,7 +50,30 @@ CREATE TABLE IF NOT EXISTS audit_log (
     created_at             TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Idempotent add for databases initialized before policy_version existed.
+ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS policy_version TEXT;
+
 CREATE INDEX IF NOT EXISTS audit_log_created_at_idx ON audit_log (created_at);
+
+-- Human-in-the-loop review queue (§17 of the design doc). A HIGH-risk answer is withheld from
+-- the caller and lands here instead; a MEDIUM-risk answer is returned but still logged here as
+-- "flagged" for after-the-fact review. Nothing here auto-decides anything — it's the workflow a
+-- human reviewer would use, via the /review-queue API.
+CREATE TABLE IF NOT EXISTS review_queue (
+    review_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    trace_id         TEXT NOT NULL,
+    query             TEXT NOT NULL,
+    draft_answer      TEXT NOT NULL,
+    confidence         DOUBLE PRECISION,
+    risk_level         TEXT NOT NULL CHECK (risk_level IN ('medium', 'high')),
+    risk_reasons       TEXT[],
+    status              TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+    reviewer_note       TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_at          TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS review_queue_status_idx ON review_queue (status);
 
 -- User feedback (§20 of the design doc — RAG error taxonomy classification happens in Python).
 CREATE TABLE IF NOT EXISTS feedback (

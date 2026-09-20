@@ -31,10 +31,15 @@ This is stated explicitly so nothing here is overclaimed.
 | Guardrails (input/retrieval/output) | ✅ Implemented, unit-tested |
 | Hash-chain audit log + `verify` CLI | ✅ Implemented — tamper-detection integration-tested |
 | RAGAs golden set + evaluation harness | ✅ Harness built and runs against the real corpus (small golden set — see `/evaluation`) |
-| Human-in-the-loop escalation, fallback/recovery agent chain | ⬜ Not yet implemented (guardrail/abstention path exists; the dedicated recovery agent from §18 doesn't yet) |
-| AI control plane (single config surface for all policy) | 🟡 Partial — `agent_policy.yaml` + `.env` exist; not yet unified into one loader |
-| ADRs, presentation deck, `/doc` write-ups | ⬜ Not yet written |
-| Cloud reference architecture | 📄 Documented only — no cloud environment for this assessment |
+| Human-in-the-loop escalation (§17) | ✅ Implemented — risk-based (`guardrails/human_review.py`), `review_queue` table + `/review-queue` API, unit + integration tested |
+| Fallback / recovery chain (§18) | ✅ Implemented — agent-level (lexical-only + relaxed-hybrid retrieval strategies) and model-level (primary → fallback model → retrieval-only degrade), in `agents/orchestrator.py` |
+| AI control plane (single config surface for all policy) | ✅ Unified — `config/control_plane.py` is the one loader for `agent_policy.yaml`; every threshold, retry bound, risk keyword and fallback toggle lives there, version-stamped onto every audit row |
+| Presentation deck | ✅ Done — 14 slides, [`doc/presentation/`](./doc/presentation) (`.pptx`) + a shareable link (ask for it) |
+| REST API docs | ✅ Real OpenAPI spec exported to [`doc/api/openapi.json`](./doc/api/openapi.json) — 9 live endpoints |
+| ADRs (`doc/architecture/ADR-001..008`) | ✅ Written — one per non-obvious decision, including the two added this pass (HITL/fallback design, control-plane unification) |
+| Architecture / security / deployment write-ups in `/doc` | ✅ Written — [`02-solution-architecture.md`](./doc/02-solution-architecture.md), [`09-security-design.md`](./doc/09-security-design.md), [`11-deployment-guide.md`](./doc/11-deployment-guide.md), [`16-production-readiness-gap.md`](./doc/16-production-readiness-gap.md) |
+| Cloud reference architecture | ✅ Written as a standalone recommendation — [`12-cloud-reference-architecture.md`](./doc/12-cloud-reference-architecture.md) (GCP). **Still not deployed** — no cloud environment was provisioned for this assessment, and that document says so explicitly rather than implying otherwise |
+| API authentication, rate limiting, CI/CD, PII redaction | ⬜ Genuinely not built — no auth/traffic/PII threat model exists at this assessment's single-local-user scale to justify building them now; scoped as concrete recommendations in [`09-security-design.md`](./doc/09-security-design.md) and [`16-production-readiness-gap.md`](./doc/16-production-readiness-gap.md) rather than built speculatively |
 
 **On the corpus**: two PDFs were provided; the second (`EthicalLeadership1.pdf`, 8 pages but image/slide-heavy)
 made Docling's layout+OCR model take 30+ minutes per the user's own test and was dropped for this pass
@@ -176,30 +181,39 @@ aegisrag/
 ├── .env.example
 │
 ├── src/aegisrag/
-│   ├── api/            FastAPI app — OpenAI-compatible /v1/chat/completions, /documents, /ingestion, /feedback, /health
-│   ├── config/         settings.py (pydantic-settings from .env), agent_policy.yaml, prompts.py (prompt registry)
-│   ├── ingestion/      pipeline.py — Docling parse + HybridChunker + Ollama embed + PGVector upsert, in one place
-│   ├── retrieval/      hybrid_retriever.py — LlamaIndex BaseRetriever: PGVector cosine + Postgres full-text, RRF-fused
-│   ├── agents/         definitions.py (5 CrewAI Agents), orchestrator.py (the decision loop), llm.py, json_utils.py
-│   ├── guardrails/     input / retrieval-content / output checks (§16) — unit-tested
-│   ├── audit/           hash-chain writer + `verify` CLI (§19) — tamper-detection integration-tested
+│   ├── api/            FastAPI app — /v1/chat/completions, /documents, /ingestion, /feedback,
+│   │                    /review-queue (+ /decision), /audit/verify, /health — 9 endpoints
+│   ├── config/         settings.py (infra, from .env), agent_policy.yaml + control_plane.py
+│   │                    (the single AI-control-plane loader — ADR-008), prompts.py (registry)
+│   ├── ingestion/      pipeline.py — Docling parse + HybridChunker + Ollama embed + PGVector upsert
+│   ├── retrieval/      hybrid_retriever.py — hybrid (RRF-fused) + lexical-only + relaxed-hybrid
+│   │                    strategies (the last two feed agent-level recovery, §18)
+│   ├── agents/         definitions.py (5 CrewAI Agents, primary or fallback LLM), orchestrator.py
+│   │                    (the decision loop + recovery + model fallback), llm.py, json_utils.py
+│   ├── guardrails/     guardrails.py (input/retrieval/output, §16) + human_review.py (risk-based
+│   │                    HITL queue, §17) — both unit- and integration-tested
+│   ├── audit/           hash-chain writer + `verify` CLI (§19), policy-version-stamped — tested
 │   ├── evaluation/     run.py — RAGAs harness against the golden set, baseline-regression check
 │   ├── observability/  tracing.py — Phoenix/OTel wiring (LlamaIndex + LiteLLM instrumentation)
 │   └── database/       schema.sql (raw DDL, not an ORM) + db.py (psycopg3 connection helper)
 │   # chunking/ and embeddings/ from the original plan were folded into ingestion/ and retrieval/ —
-│   # splitting them into their own modules would've been indirection with no real seam, given each
-│   # is one library call (Docling's HybridChunker, llama-index's OllamaEmbedding); no feedback/
-│   # module either yet — see the Status table for what §18/§20 (fallback agents, error-taxonomy
-│   # feedback loop) still need.
+│   # each is one library call (Docling's HybridChunker, llama-index's OllamaEmbedding), so a
+│   # separate module would've been indirection with no real seam.
 │
 ├── prompts/              # externalized prompt templates (§5), versioned YAML — planner/retrieval/validation/synthesis
 ├── evaluation/
 │   ├── datasets/golden/       # ethics_of_ai.json — 4 real questions against the ingested PDF
 │   └── datasets/adversarial/  # prompt-injection / contradiction / stale-version test cases — not yet populated
 ├── tests/
-│   ├── unit/             guardrails, JSON-repair parsing
-│   └── integration/      audit hash-chain (tamper detection), ingestion dedupe — against real Postgres
-├── doc/                  # architecture, ADRs, deployment, the full write-up — not yet authored
+│   ├── unit/             guardrails, human-review risk assessment, JSON-repair parsing
+│   └── integration/      audit hash-chain (tamper detection), review queue, ingestion dedupe — real Postgres
+├── doc/
+│   ├── architecture/ADR-001..008.md   # one per non-obvious decision
+│   ├── 02-solution-architecture.md · 09-security-design.md · 11-deployment-guide.md
+│   ├── 12-cloud-reference-architecture.md   # GCP — recommended, not deployed
+│   ├── 16-production-readiness-gap.md
+│   ├── api/openapi.json               # exported from the live FastAPI app
+│   └── presentation/*.pptx            # the 14-slide walkthrough deck
 ├── diagrams/
 ├── infra/                # docker (used) + terraform/kubernetes (reference only — not applied)
 └── .github/workflows/    # CI file — not yet added
@@ -284,24 +298,30 @@ environment/config, not from Python source — see §21 (AI control plane) in th
 
 ## Further reading
 
-- [`/doc`](./doc) — architecture, ADRs, deployment guide, security/threat model, production-readiness
-  gap (once authored)
+- [`/doc`](./doc) — architecture, ADRs, deployment guide, security/threat model, cloud reference
+  architecture, production-readiness gap — all written, see the Status table above
 - The full design doc (six-plane architecture, agent design, guardrails, human-in-the-loop, fallback
   chains, hash-chain audit logging, the feedback/error-taxonomy loop, cloud reference architecture,
   fresher-vs-senior notes per component) — ask for the link if you don't have it bookmarked.
+- **Walkthrough deck** — 14 slides covering the name/positioning, architecture, the live-verified
+  ingestion/agent/answer numbers, trust & governance, observability, evaluation, the fresher-vs-senior
+  framing, and the honest built-vs-documented status: https://claude.ai/artifact/BziJxaSaFQskjZe3nre3zf
+  (private by default — share it from the page's Share menu before sending the link to anyone else),
+  or the `.pptx` in [`doc/presentation/`](./doc/presentation).
 
 ## Roadmap
 
 Done: ingestion, hybrid retrieval, the 5-agent crew, FastAPI + OpenWebUI wiring, Phoenix tracing,
-guardrails, hash-chain audit log, a first RAGAs pass. What's left:
+guardrails, human-in-the-loop, agent- and model-level fallback/recovery, the hash-chain audit log,
+a unified AI control plane, a first RAGAs pass, and the full `/doc` write-up (ADRs, architecture,
+security, deployment, cloud reference, production-readiness gap) plus the deck. What's left —
+genuinely not built, scoped rather than guessed at:
 
 1. Expand the golden + adversarial eval sets (currently 4 questions on 1 document)
-2. Fallback/recovery agent chain (§18) — right now a failed evidence check ends in abstention, not
-   a query-reformulation retry via a dedicated recovery agent
-3. Human-in-the-loop risk-based escalation (§17)
-4. Unify config into one AI-control-plane loader (§21) — `agent_policy.yaml` and `.env` both exist
-   but aren't merged into a single source of truth yet
-5. Fix the OpenWebUI title-generation double-cost issue
-6. `/doc` write-up (architecture, ADRs, security/threat model, production-readiness gap), diagrams,
-   presentation deck, OpenAPI export
-7. GitHub Actions CI (lint/test/eval-gate — not yet added)
+2. API authentication + rate limiting (no threat model at single-local-user scale needs them yet —
+   see `doc/09-security-design.md`)
+3. GitHub Actions CI (lint/test/eval-gate)
+4. Fix the OpenWebUI title-generation double-cost issue
+5. Re-add the second corpus PDF with Docling OCR disabled (it's born-digital, not scanned)
+6. Chaos-test the model-level fallback against an actually-unavailable Ollama instance (the code
+   path is implemented and reviewed, not yet exercised against a real outage)
