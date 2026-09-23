@@ -34,6 +34,19 @@ class CachedAnswer:
     cache_id: str
 
 
+@dataclass
+class LookupResult:
+    """`hit` is the cached answer only when the best match cleared `threshold`. `similarity` is
+    the best candidate's score either way (None only if the cache is empty) -- callers that want
+    to show *why* a lookup missed (e.g. "0.71 found, needed 0.80") need this even on a miss,
+    which a plain Optional[CachedAnswer] return can't carry. `query_embedding` is this query's own
+    embedding, computed once here -- `store()` accepts it back so a cache-miss turn never embeds
+    the same question text twice (once to look it up, once again to save it)."""
+    hit: CachedAnswer | None
+    similarity: float | None
+    query_embedding: Vector
+
+
 class AnswerCache:
     def __init__(self):
         settings = get_settings()
@@ -41,7 +54,7 @@ class AnswerCache:
             model_name=settings.ollama_embed_model, base_url=settings.ollama_base_url
         )
 
-    def lookup(self, query: str, threshold: float) -> CachedAnswer | None:
+    def lookup(self, query: str, threshold: float) -> LookupResult:
         query_vector = Vector(self._embedder.get_text_embedding(query))
         with get_connection() as conn:
             register_vector(conn)
@@ -57,10 +70,14 @@ class AnswerCache:
                     (query_vector, query_vector),
                 )
                 row = cur.fetchone()
-        if not row or row[6] < threshold:
-            return None
+        if not row:
+            return LookupResult(hit=None, similarity=None, query_embedding=query_vector)
 
         cache_id, answer, confidence, status, citations, source_trace_id, similarity = row
+        similarity = float(similarity)
+        if similarity < threshold:
+            return LookupResult(hit=None, similarity=similarity, query_embedding=query_vector)
+
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -69,18 +86,28 @@ class AnswerCache:
                 )
             conn.commit()
 
-        return CachedAnswer(
-            answer=answer, confidence=confidence, status=status, citations=citations,
-            source_trace_id=source_trace_id, similarity=float(similarity), cache_id=str(cache_id),
+        return LookupResult(
+            hit=CachedAnswer(
+                answer=answer, confidence=confidence, status=status, citations=citations,
+                source_trace_id=source_trace_id, similarity=similarity, cache_id=str(cache_id),
+            ),
+            similarity=similarity,
+            query_embedding=query_vector,
         )
 
     def store(
         self, query: str, answer: str, confidence: float, status: str,
-        citations: list[dict], source_trace_id: str,
+        citations: list[dict], source_trace_id: str, query_embedding: Vector | None = None,
     ) -> None:
+        """`query_embedding`: pass the `LookupResult.query_embedding` from this same turn's
+        `lookup()` call to skip re-embedding identical text. Only recomputed when None, so
+        `store()` still works standalone (e.g. a future backfill/import path with no prior
+        lookup)."""
         if status not in _CACHEABLE_STATUSES:
             return
-        query_vector = Vector(self._embedder.get_text_embedding(query))
+        query_vector = query_embedding if query_embedding is not None else Vector(
+            self._embedder.get_text_embedding(query)
+        )
         with get_connection() as conn:
             register_vector(conn)
             with conn.cursor() as cur:

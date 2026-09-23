@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from pathlib import Path
@@ -71,11 +72,19 @@ def _detect_openwebui_task(messages: list[ChatMessage]) -> str | None:
     return None
 
 
+_BARE_TAG_RE = re.compile(r"^</?[\w_-]+>$")
+
+
 def _extract_real_question(messages: list[ChatMessage]) -> str:
     """OpenWebUI's task call often embeds the actual conversation *inside* a single message's
     content, after a '### Chat History:' marker, rather than as separate messages — so "the
     first user message" can BE the task instruction itself. Prefer any message that isn't the
-    task instruction; within the task-instruction message, prefer text after a known marker."""
+    task instruction; within the task-instruction message, prefer text after a known marker.
+
+    OpenWebUI wraps the substituted history in literal `<chat_history>...</chat_history>`
+    delimiter tags, not just the marker text — the opening tag itself is the first "line" after
+    the marker, so it must be skipped or it gets mistaken for real content (this was a real bug:
+    every generated title/tag came out as the literal string "<chat_history>")."""
     for m in messages:
         content = m.content.strip()
         lowered = content.lower()
@@ -87,7 +96,9 @@ def _extract_real_question(messages: list[ChatMessage]) -> str:
                     after = content[idx + len(split_marker):].strip()
                     for line in after.splitlines():
                         line = line.strip().lstrip("-*").strip()
-                        if line and ":" in line[:12]:  # "USER: ..." / "User: ..."
+                        if not line or _BARE_TAG_RE.match(line):
+                            continue
+                        if ":" in line[:12]:  # "USER: ..." / "User: ..."
                             line = line.split(":", 1)[1].strip()
                         if line:
                             return line
@@ -104,6 +115,59 @@ def _cheap_task_response(task: str, messages: list[ChatMessage]) -> str:
     if task == "tags":
         return '{"tags": ["general"]}'
     return f'{{"title": "{short}"}}'
+
+
+_STEP_LABELS = {
+    "semantic_cache": "Semantic Cache",
+    "planner": "Planner",
+    "retrieval": "Retrieval",
+    "evidence_validator": "Evidence Validator",
+    "recovery_agent": "Recovery Agent",
+    "synthesizer": "Synthesizer",
+    "citation_quality": "Citation & Quality",
+    "human_review": "Human Review",
+}
+
+_METHOD_LABELS = {
+    "regex": "regex",
+    "cosine_similarity": "cosine similarity",
+    "llm": "LLM call",
+    "context_trim": "context trim",
+}
+
+
+def _format_steps_panel(steps: list[dict]) -> str:
+    """A collapsible '<details>' block OpenWebUI renders as a click-to-expand panel above the
+    answer -- shows the semantic-cache decision (hit/miss + similarity vs threshold) and, when the
+    cache misses, exactly which agents ran an LLM call vs were bypassed by regex/cosine similarity,
+    so what's otherwise invisible pipeline behavior is visible per-question in the chat UI itself."""
+    if not steps:
+        return ""
+    lines = ["<details>", "<summary>Show pipeline steps</summary>", ""]
+    step_no = 0
+    for s in steps:
+        label = _STEP_LABELS.get(s["agent"], s["agent"])
+        if s["agent"] == "semantic_cache":
+            marker = {"cache_hit": "✅ HIT", "cache_miss": "❌ MISS", "cache_stored": "💾 STORED"}.get(
+                s["status"], s["status"]
+            )
+            if lines and lines[-1] != "":
+                lines.append("")
+            lines.append(f"**{label}: {marker}** — {s['detail']}")
+            lines.append("")
+            continue
+        step_no += 1
+        method = _METHOD_LABELS.get(s.get("method"), s.get("method") or "")
+        if s["status"] == "bypassed":
+            tag = f"⏭️ bypassed ({method})"
+        elif s["status"] == "failed":
+            tag = "⚠️ failed"
+        else:
+            tag = f"▶️ ran" + (f" ({method})" if method else "")
+        lines.append(f"{step_no}. **{label}** — {tag}: {s['detail']}")
+    lines.append("")
+    lines.append("</details>")
+    return "\n".join(lines)
 
 
 @app.post("/v1/chat/completions")
@@ -137,7 +201,8 @@ def chat_completions(req: ChatCompletionRequest):
             lines.append(f"- {c.source_file}, p.{c.page_no}" + (f" ({c.section_path})" if c.section_path else ""))
         citations_text = "\n\n**Sources**\n" + "\n".join(lines)
 
-    content = result.answer + citations_text
+    steps_panel = _format_steps_panel(result.steps)
+    content = (steps_panel + "\n\n" if steps_panel else "") + result.answer + citations_text
 
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
@@ -157,6 +222,7 @@ def chat_completions(req: ChatCompletionRequest):
             "confidence": result.confidence,
             "iterations": result.iterations,
             "review_id": result.review_id,
+            "steps": result.steps,
         },
     }
 

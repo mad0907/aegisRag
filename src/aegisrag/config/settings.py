@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_primary_model: str = "llama3.2:3b"
     ollama_fallback_model: str = "qwen2.5:7b-instruct"
+    # "Light" tier (added 2026-09-23, model_tiering.enabled in agent_policy.yaml): used only for
+    # the Planner's step -- see orchestrator.py's _LIGHT_TIER_AGENTS for why the other two
+    # short-JSON steps (Evidence Validator, Citation & Quality) were tried and excluded rather
+    # than tiered too. Not a fallback (never used to recover from a failure) -- an independent
+    # third tier.
+    ollama_light_model: str = "llama3.2:1b"
     ollama_embed_model: str = "nomic-embed-text"
 
     # Postgres / PGVector

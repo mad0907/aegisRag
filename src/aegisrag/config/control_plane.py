@@ -62,9 +62,27 @@ class AnswerCachePolicy(BaseModel):
     """Semantic cache: a new query's embedding is compared against past queries; a close-enough
     match (cosine similarity >= threshold) returns the cached answer directly — no retrieval, no
     agent LLM calls at all. Only genuinely-answered results are ever cached (never an abstain,
-    a pending-review, or a degraded response)."""
+    a pending-review, or a degraded response).
+
+    Lookup and store are independent toggles on purpose: `enabled` controls whether a cache HIT
+    can short-circuit the pipeline (the "skip work" behavior); `store_enabled` controls whether
+    a genuinely-answered result gets saved afterward, regardless of whether a lookup happened or
+    hit. Flipping `enabled` off for a demo (to force every question through the full pipeline)
+    would otherwise also stop the cache from accumulating data in the background — with these
+    split, a demo can disable lookups while the cache keeps building up for later."""
     enabled: bool = True
+    store_enabled: bool = True
     similarity_threshold: float = 0.92
+
+
+class ModelTieringPolicy(BaseModel):
+    """A different latency lever from smart_bypass/answer_cache: those two AVOID work (skip a
+    call, skip the pipeline); this one makes the work itself cheaper. Planner, Evidence Validator
+    and Citation & Quality are short structured-JSON classification calls, not open-ended
+    generation — routing them to OLLAMA_LIGHT_MODEL (settings.py) instead of the primary model
+    measurably cuts their latency without touching Synthesis, the one step that actually needs
+    real generative capability. Toggle off to run every agent uniformly on the primary model."""
+    enabled: bool = True
 
 
 class AgentPolicy(BaseModel):
@@ -76,6 +94,7 @@ class AgentPolicy(BaseModel):
     fallback: FallbackPolicy = FallbackPolicy()
     smart_bypass: SmartBypassPolicy = SmartBypassPolicy()
     answer_cache: AnswerCachePolicy = AnswerCachePolicy()
+    model_tiering: ModelTieringPolicy = ModelTieringPolicy()
 
 
 @lru_cache

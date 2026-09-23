@@ -54,6 +54,29 @@ smart_bypass:
 # every agent LLM call entirely. Measured on this corpus: an identical question scores 1.0, real
 # paraphrases scored 0.93-0.97, a genuinely different question scored 0.80 — 0.92 sits with margin
 # on both sides. Only ever caches a genuinely-answered result (never an abstain or a pending review).
+#
+# `enabled` and `store_enabled` are independent — `enabled` gates the LOOKUP (can a cache hit
+# short-circuit the pipeline), `store_enabled` gates the STORE (does a fresh answer get saved
+# afterward). Left split on purpose: turning `enabled` off to force every question through the
+# full pipeline for a demo would otherwise also stop the cache from accumulating data — with
+# `store_enabled` staying true, the cache keeps building silently even while lookups are off.
+#
+# DEMO TOGGLE: flip `enabled: false` here (and/or smart_bypass.enabled above) to force every
+# question through the full 5-agent pipeline with no shortcuts — restart `make api` after
+# editing (this file is loaded once at startup and cached). Useful to show "with vs without"
+# side by side: ask the same question with each setting and compare the Phoenix trace.
 answer_cache:
   enabled: true
+  store_enabled: true
   similarity_threshold: 0.92
+
+# A different kind of latency lever from the two above: smart_bypass and answer_cache AVOID
+# work; this makes the work itself cheaper. Only the Planner is routed to OLLAMA_LIGHT_MODEL
+# (llama3.2:1b) instead of the primary model. Evidence Validator and Citation & Quality look
+# like equally good candidates (also short structured JSON) but were tried and rejected: on
+# this corpus the 1B model produced an unreliable verdict/confidence score on those two --
+# cheap to be wrong on the Planner's coarse retrieval decision, expensive to be wrong on a
+# judgment gate the rest of the pipeline trusts. See orchestrator.py's _LIGHT_TIER_AGENTS and
+# doc/13-latency-optimization.md for the measured runs behind this call.
+model_tiering:
+  enabled: true

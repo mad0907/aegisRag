@@ -34,7 +34,7 @@ This is stated explicitly so nothing here is overclaimed.
 | Human-in-the-loop escalation (§17) | ✅ Implemented — risk-based (`guardrails/human_review.py`), `review_queue` table + `/review-queue` API, unit + integration tested |
 | Fallback / recovery chain (§18) | ✅ Implemented — agent-level (lexical-only + relaxed-hybrid retrieval strategies) and model-level (primary → fallback model → retrieval-only degrade), in `agents/orchestrator.py` |
 | AI control plane (single config surface for all policy) | ✅ Unified — `config/control_plane.py` is the one loader for `agent_policy.yaml`; every threshold, retry bound, risk keyword and fallback toggle lives there, version-stamped onto every audit row |
-| Presentation deck | ✅ Done — 14 slides, [`doc/presentation/`](./doc/presentation) (`.pptx`) + a shareable link (ask for it) |
+| Presentation deck | ✅ Done — 16 slides, [`doc/presentation/`](./doc/presentation) (`.pptx`) + a shareable link (ask for it) |
 | REST API docs | ✅ Real OpenAPI spec exported to [`doc/api/openapi.json`](./doc/api/openapi.json) — 9 live endpoints |
 | ADRs (`doc/architecture/ADR-001..008`) | ✅ Written — one per non-obvious decision, including the two added this pass (HITL/fallback design, control-plane unification) |
 | Architecture / security / deployment write-ups in `/doc` | ✅ Written — [`02-solution-architecture.md`](./doc/02-solution-architecture.md), [`09-security-design.md`](./doc/09-security-design.md), [`11-deployment-guide.md`](./doc/11-deployment-guide.md), [`16-production-readiness-gap.md`](./doc/16-production-readiness-gap.md) |
@@ -250,6 +250,7 @@ make init-db            # applies src/aegisrag/database/schema.sql
 # Local LLM
 ollama pull llama3.2:3b          # primary — fast, ~2x qwen2.5:7b-instruct's generation speed on CPU
 ollama pull qwen2.5:7b-instruct   # fallback — larger/slower, escalated to only on a primary failure
+ollama pull llama3.2:1b           # light tier — Planner only, see doc/13-latency-optimization.md
 ollama pull nomic-embed-text
 
 # Put PDFs in data/knowledge_base/, then:
@@ -303,6 +304,30 @@ Postgres connection, Phoenix collector endpoint, and the agent policy thresholds
 `retrieval.min_score`, confidence thresholds for auto-answer / qualify / abstain) all come from
 environment/config, not from Python source — see §21 (AI control plane) in the design doc.
 
+## Latency & performance
+
+Two independent kinds of optimization, each config-toggleable in `agent_policy.yaml` (restart
+`make api` after editing — policy is loaded once at startup):
+
+- **Work avoidance** — `smart_bypass` (regex/cosine-similarity shortcuts for Planner and
+  Evidence Validator) and `answer_cache` (semantic cache; a close-enough repeat question skips
+  the whole pipeline). Measured: **107.8s → 58.3s**.
+- **Inference optimization** — `model_tiering` (Planner runs on a smaller model,
+  `llama3.2:1b`, instead of the primary `llama3.2:3b`) plus always-on context trimming (Synthesis
+  only sees the passages Evidence Validator actually validated, not every retrieved chunk).
+  Measured with `smart_bypass`/`answer_cache` both off, so this isolates the effect on the full
+  un-shortcut pipeline: **30.8s → 18.7s**, same question, same outcome (confidence 1.0 both ways).
+
+Full writeup — including a real negative result (model tiering was tried on Evidence Validator and
+Citation & Quality too, and rejected after it measurably hurt reliability), exact model-per-agent
+breakdown, and all four demo toggles — in
+[`doc/13-latency-optimization.md`](./doc/13-latency-optimization.md).
+
+`answer_cache.enabled` (lookup) and `answer_cache.store_enabled` (store) are independent: you can
+disable lookups for a demo — forcing every question through the full pipeline — while the cache
+keeps accumulating data in the background, so re-enabling lookups later has something to hit
+against.
+
 ## Further reading
 
 - [`/doc`](./doc) — architecture, ADRs, deployment guide, security/threat model, cloud reference
@@ -310,7 +335,7 @@ environment/config, not from Python source — see §21 (AI control plane) in th
 - The full design doc (six-plane architecture, agent design, guardrails, human-in-the-loop, fallback
   chains, hash-chain audit logging, the feedback/error-taxonomy loop, cloud reference architecture,
   fresher-vs-senior notes per component) — ask for the link if you don't have it bookmarked.
-- **Walkthrough deck** — 14 slides covering the name/positioning, architecture, the live-verified
+- **Walkthrough deck** — 16 slides covering the name/positioning, architecture, the live-verified
   ingestion/agent/answer numbers, trust & governance, observability, evaluation, the fresher-vs-senior
   framing, and the honest built-vs-documented status: https://claude.ai/artifact/BziJxaSaFQskjZe3nre3zf
   (private by default — share it from the page's Share menu before sending the link to anyone else),

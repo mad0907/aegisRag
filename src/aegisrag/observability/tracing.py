@@ -14,10 +14,25 @@ from aegisrag.config.settings import get_settings
 logger = logging.getLogger(__name__)
 
 _initialized = False
+_tracer_provider = None
+
+
+def get_tracer_provider():
+    """The Phoenix-backed provider `init_tracing()` created, or None before startup.
+
+    CrewAI's own bundled telemetry claims the global OTel TracerProvider as a side effect of
+    `import crewai` -- before this module's `register()` call ever runs, since orchestrator.py
+    imports crewai first. OTel's global provider can only be set once per process, so Phoenix's
+    `register()` silently loses that race: `opentelemetry.trace.get_tracer(...)` (the global API)
+    keeps resolving to CrewAI's provider, not Phoenix's, and any span created through it never
+    reaches Phoenix. Application code that wants a span in Phoenix must get its tracer from
+    *this* provider directly, not from the global `trace` API.
+    """
+    return _tracer_provider
 
 
 def init_tracing(project_name: str = "aegisrag") -> None:
-    global _initialized
+    global _initialized, _tracer_provider
     if _initialized:
         return
 
@@ -28,6 +43,7 @@ def init_tracing(project_name: str = "aegisrag") -> None:
         protocol="grpc",
         auto_instrument=False,
     )
+    _tracer_provider = tracer_provider
 
     try:
         from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
