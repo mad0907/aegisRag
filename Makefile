@@ -1,4 +1,4 @@
-.PHONY: venv install up down logs init-db ingest api test eval verify-audit fmt
+.PHONY: venv install up down logs init-db ingest api test eval verify-audit fmt phoenix webui
 
 # python3 is often too new for crewai's published releases (see README) — pin to 3.11.
 venv:
@@ -35,6 +35,14 @@ eval:
 
 verify-audit:
 	.venv/bin/python -m aegisrag.audit.hashchain
+
+# Convenience only — Phoenix and OpenWebUI aren't "run" by make, they're already up as part of
+# `make up` (docker-compose); these just open the browser to the right URL.
+phoenix:
+	open http://localhost:6006
+
+webui:
+	open http://localhost:3000
 
 fmt:
 	.venv/bin/ruff check --fix src tests

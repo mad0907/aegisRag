@@ -3,6 +3,12 @@
 ## Status
 Accepted — implemented (`src/aegisrag/agents/llm.py`, `config/settings.py`).
 
+**Updated 2026-09-23**: primary/fallback swapped. `llama3.2:3b` is now primary and
+`qwen2.5:7b-instruct` is now fallback — measured ~2x faster generation on this CPU-only hardware,
+and `llama3.2:3b` had already been proven against these exact prompts in its former fallback role,
+so the swap carried low risk. The Decision section below is left as originally written for
+historical context; the config defaults in `settings.py`/`.env.example` reflect the swap.
+
 ## Context
 The assessment mandates Ollama as "local or remote LLM provider." A single hard-coded model name
 is the simplest implementation.

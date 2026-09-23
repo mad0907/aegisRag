@@ -47,8 +47,79 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = False
 
 
+# OpenWebUI issues internal "task" calls (title generation, tag generation, follow-up
+# suggestions) through this same OpenAI-compatible endpoint — indistinguishable from a real
+# question except for a distinctive instruction OpenWebUI itself writes into the prompt. Left
+# unhandled, every one of these silently ran the full 5-agent pipeline, roughly doubling the
+# cost of the first message in every new chat for zero user-facing benefit (a chat title). This
+# check is deliberately narrow — it only matches OpenWebUI's own well-known task markers, so an
+# ambiguous real question always falls through to the real pipeline rather than risk a
+# misclassified answer.
+_TASK_MARKERS = ("### task:", "generate a concise", "generate 1-3 broad tags", "generate a title")
+
+
+def _detect_openwebui_task(messages: list[ChatMessage]) -> str | None:
+    if not messages:
+        return None
+    text = messages[-1].content.lower()
+    if not any(marker in text for marker in _TASK_MARKERS):
+        return None
+    if "tag" in text:
+        return "tags"
+    if "title" in text:
+        return "title"
+    return None
+
+
+def _extract_real_question(messages: list[ChatMessage]) -> str:
+    """OpenWebUI's task call often embeds the actual conversation *inside* a single message's
+    content, after a '### Chat History:' marker, rather than as separate messages — so "the
+    first user message" can BE the task instruction itself. Prefer any message that isn't the
+    task instruction; within the task-instruction message, prefer text after a known marker."""
+    for m in messages:
+        content = m.content.strip()
+        lowered = content.lower()
+        if any(marker in lowered for marker in _TASK_MARKERS):
+            # This message IS the task instruction — look inside it for the embedded history.
+            for split_marker in ("### chat history:", "chat history:"):
+                idx = lowered.find(split_marker)
+                if idx != -1:
+                    after = content[idx + len(split_marker):].strip()
+                    for line in after.splitlines():
+                        line = line.strip().lstrip("-*").strip()
+                        if line and ":" in line[:12]:  # "USER: ..." / "User: ..."
+                            line = line.split(":", 1)[1].strip()
+                        if line:
+                            return line
+            continue  # nothing usable found inside the instruction message, try the next one
+        if content:
+            return content
+    return "New chat"
+
+
+def _cheap_task_response(task: str, messages: list[ChatMessage]) -> str:
+    source = _extract_real_question(messages)
+    words = source.strip().split()
+    short = " ".join(words[:6]) + ("…" if len(words) > 6 else "")
+    if task == "tags":
+        return '{"tags": ["general"]}'
+    return f'{{"title": "{short}"}}'
+
+
 @app.post("/v1/chat/completions")
 def chat_completions(req: ChatCompletionRequest):
+    task = _detect_openwebui_task(req.messages)
+    if task:
+        content = _cheap_task_response(task, req.messages)
+        return {
+            "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": req.model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+            "aegisrag": {"status": "openwebui_task_shortcircuit", "task": task},
+        }
+
     user_messages = [m.content for m in req.messages if m.role == "user"]
     query = user_messages[-1] if user_messages else ""
 

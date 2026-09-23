@@ -19,6 +19,13 @@ services:
   phoenix:
     image: arizephoenix/phoenix:latest
     container_name: aegisrag-phoenix
+    environment:
+      # Without this, Phoenix stores its SQLite DB in the container's own writable layer,
+      # NOT the mounted volume below -- the volume silently receives nothing, and every trace
+      # is lost the moment the container is removed (e.g. `make down`). This was a real bug:
+      # confirmed by inspecting the volume directly (`docker run --rm -v aegisrag_aegisrag_phoenix:/data busybox ls /data`)
+      # and finding it empty despite traces having been recorded in earlier sessions.
+      PHOENIX_WORKING_DIR: /mnt/data
     ports:
       - "6006:6006"   # UI
       - "4317:4317"   # OTLP gRPC

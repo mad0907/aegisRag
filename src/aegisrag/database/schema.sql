@@ -75,6 +75,28 @@ CREATE TABLE IF NOT EXISTS review_queue (
 
 CREATE INDEX IF NOT EXISTS review_queue_status_idx ON review_queue (status);
 
+-- Semantic answer cache. On a new query, its embedding is compared against query_embedding here
+-- (cosine similarity) — a close-enough match (agent_policy.yaml: answer_cache.similarity_threshold)
+-- returns the cached answer directly, skipping retrieval AND every agent LLM call entirely. Only
+-- genuinely-answered results are cached (never an abstain, a pending-review, or a degraded
+-- response — see orchestrator.py) so a cache hit is never a cached non-answer.
+CREATE TABLE IF NOT EXISTS answer_cache (
+    cache_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    query               TEXT NOT NULL,
+    query_embedding     vector(768) NOT NULL,
+    answer              TEXT NOT NULL,
+    citations           JSONB NOT NULL DEFAULT '[]',
+    confidence           DOUBLE PRECISION NOT NULL,
+    status                TEXT NOT NULL,
+    source_trace_id      TEXT NOT NULL,
+    hit_count             INTEGER NOT NULL DEFAULT 0,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_hit_at            TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS answer_cache_embedding_idx
+    ON answer_cache USING hnsw (query_embedding vector_cosine_ops);
+
 -- User feedback (§20 of the design doc — RAG error taxonomy classification happens in Python).
 CREATE TABLE IF NOT EXISTS feedback (
     feedback_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),

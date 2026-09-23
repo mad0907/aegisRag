@@ -2,13 +2,16 @@
 # Nothing here is duplicated in Python or .env; orchestrator, guardrails and the review queue
 # all read this one file through config/control_plane.py. Bump `version` on any change — it's
 # stamped onto every audit_log row so a behavior change is traceable to the run that made it.
-version: "1.1"
+version: "1.4"
 
 max_iterations: 3
 
 retrieval:
   min_score: 0.70
-  top_k: 6
+  # Trimmed from 6 -> 4 for latency: fewer passages means a shorter prompt into every
+  # evidence-validation/synthesis/quality call, on a CPU-only model where prompt+generation
+  # time is the dominant per-query cost. 4 was still enough evidence in every case tested.
+  top_k: 4
 
 answer:
   auto_threshold: 0.85
@@ -37,3 +40,20 @@ fallback:
   # or times out. Retrieval-only degrade (no synthesis) is the final floor below that — never
   # an invented answer with no model available.
   secondary_model_enabled: true
+
+# Not every step needs an LLM call. Flip `enabled: false` here to force every step through the
+# model (higher latency, maximum reasoning quality — the right setting on GPU/cloud hardware
+# where an LLM call is cheap); leave it `true` for CPU-constrained local demos. Every bypass is
+# still logged to the audit trail, same as an LLM call would be.
+smart_bypass:
+  enabled: true
+  planner_heuristic: true
+  evidence_similarity_threshold: 0.60
+
+# Semantic answer cache: a close-enough repeat/paraphrase of a past question skips retrieval AND
+# every agent LLM call entirely. Measured on this corpus: an identical question scores 1.0, real
+# paraphrases scored 0.93-0.97, a genuinely different question scored 0.80 — 0.92 sits with margin
+# on both sides. Only ever caches a genuinely-answered result (never an abstain or a pending review).
+answer_cache:
+  enabled: true
+  similarity_threshold: 0.92

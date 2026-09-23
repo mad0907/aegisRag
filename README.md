@@ -196,28 +196,33 @@ aegisrag/
 │   ├── evaluation/     run.py — RAGAs harness against the golden set, baseline-regression check
 │   ├── observability/  tracing.py — Phoenix/OTel wiring (LlamaIndex + LiteLLM instrumentation)
 │   └── database/       schema.sql (raw DDL, not an ORM) + db.py (psycopg3 connection helper)
-│   # chunking/ and embeddings/ from the original plan were folded into ingestion/ and retrieval/ —
-│   # each is one library call (Docling's HybridChunker, llama-index's OllamaEmbedding), so a
-│   # separate module would've been indirection with no real seam.
+│   # chunking/, embeddings/ and feedback/ from the original scaffold were removed — each was an
+│   # empty package stub. Chunking/embedding is one library call apiece (Docling's HybridChunker,
+│   # llama-index's OllamaEmbedding) folded into ingestion/ and retrieval/; feedback is a DB table
+│   # + API endpoint (§20), not a package of its own. Kept out rather than left as dead scaffold.
 │
-├── prompts/              # externalized prompt templates (§5), versioned YAML — planner/retrieval/validation/synthesis
+├── prompts/              # externalized prompt templates (§5), versioned YAML — planner/validation/synthesis
 ├── evaluation/
 │   ├── datasets/golden/       # ethics_of_ai.json — 4 real questions against the ingested PDF
-│   └── datasets/adversarial/  # prompt-injection / contradiction / stale-version test cases — not yet populated
+│   └── datasets/adversarial/  # prompt-injection / contradiction / stale-version test cases — not yet populated,
+│                                tracked in the roadmap below, kept as the one deliberate empty placeholder
 ├── tests/
-│   ├── unit/             guardrails, human-review risk assessment, JSON-repair parsing
+│   ├── unit/             guardrails, human-review risk assessment, OpenWebUI task detection, JSON-repair parsing
 │   └── integration/      audit hash-chain (tamper detection), review queue, ingestion dedupe — real Postgres
-├── doc/
-│   ├── architecture/ADR-001..008.md   # one per non-obvious decision
-│   ├── 02-solution-architecture.md · 09-security-design.md · 11-deployment-guide.md
-│   ├── 12-cloud-reference-architecture.md   # GCP — recommended, not deployed
-│   ├── 16-production-readiness-gap.md
-│   ├── api/openapi.json               # exported from the live FastAPI app
-│   └── presentation/*.pptx            # the 14-slide walkthrough deck
-├── diagrams/
-├── infra/                # docker (used) + terraform/kubernetes (reference only — not applied)
-└── .github/workflows/    # CI file — not yet added
+└── doc/
+    ├── architecture/ADR-001..008.md   # one per non-obvious decision
+    ├── 02-solution-architecture.md · 09-security-design.md · 11-deployment-guide.md
+    ├── 12-cloud-reference-architecture.md   # GCP — recommended, not deployed
+    ├── 16-production-readiness-gap.md
+    ├── api/openapi.json               # exported from the live FastAPI app
+    └── presentation/*.pptx            # the 14-slide walkthrough deck
 ```
+
+`diagrams/`, `infra/` and a `.github/workflows/` CI stub were in the original scaffold but never got
+real content — removed rather than left as empty folders implying work that isn't there. Diagrams
+live inline as mermaid in this README and in `/doc`; the cloud target is `doc/12-cloud-reference-architecture.md`
+(prose, since nothing's been deployed — an empty `infra/terraform/` would have implied otherwise); CI
+is tracked honestly in the Status table and roadmap below as not yet built, not stubbed.
 
 ## Prerequisites
 
@@ -243,7 +248,8 @@ make up                # docker compose up -d : Postgres+PGVector, Phoenix, Open
 make init-db            # applies src/aegisrag/database/schema.sql
 
 # Local LLM
-ollama pull qwen2.5:7b-instruct
+ollama pull llama3.2:3b          # primary — fast, ~2x qwen2.5:7b-instruct's generation speed on CPU
+ollama pull qwen2.5:7b-instruct   # fallback — larger/slower, escalated to only on a primary failure
 ollama pull nomic-embed-text
 
 # Put PDFs in data/knowledge_base/, then:
@@ -259,10 +265,11 @@ ingested documents.
 | Command | What it does |
 |---|---|
 | `make install` | Create `.venv` (Python 3.11) and install all dependencies |
-| `make up` / `make down` | Start / stop Postgres+PGVector, Phoenix, OpenWebUI |
+| `make up` / `make down` | Start / stop **all three** docker-compose services at once: Postgres+PGVector, Phoenix, OpenWebUI |
 | `make init-db` | Apply the database schema (idempotent) |
 | `make ingest` | Run the Docling → PGVector ingestion pipeline over `data/knowledge_base/` |
-| `make api` | Run the FastAPI backend on `:8080` |
+| `make api` | Run the FastAPI backend on `:8080` — the one thing `make up` does *not* start; run this separately |
+| `make webui` / `make phoenix` | Convenience only — opens a browser tab to OpenWebUI (`:3000`) / Phoenix (`:6006`). Neither one *starts* anything; both services are already running once `make up` has run — these just save you typing the URL |
 | `make eval` | Run the RAGAs evaluation harness against `evaluation/datasets/golden/` |
 | `make verify-audit` | Walk the hash-chain audit log and report PASS/FAIL |
 | `make test` | Run the test suite |

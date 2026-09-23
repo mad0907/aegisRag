@@ -1,12 +1,21 @@
-"""The five agents (§4 of the design doc) — deliberately five, not fifteen."""
+"""The five agents (§4 of the design doc) — deliberately five, not fifteen.
+
+Each agent gets its own LLM instance with a max_tokens budget sized to what it actually needs
+to produce — planner/evidence-validator/citation-quality are short JSON, synthesis is the only
+step that needs real room for prose. Capping the short steps is a real, measured latency win:
+on a CPU-only 7B model, generation is the dominant cost per call, so an uncapped step that
+occasionally rambles past what it needs directly adds seconds to every single query.
+"""
+from typing import Callable
+
 from crewai import LLM, Agent
 
 from aegisrag.agents.llm import get_llm
 
+LLMFactory = Callable[..., LLM]
 
-def build_agents(llm: LLM | None = None) -> dict[str, Agent]:
-    llm = llm or get_llm()
 
+def build_agents(llm_factory: LLMFactory = get_llm) -> dict[str, Agent]:
     planner = Agent(
         role="Query Planner",
         goal="Classify the user's question and decide what to retrieve",
@@ -14,7 +23,7 @@ def build_agents(llm: LLM | None = None) -> dict[str, Agent]:
             "You analyze incoming questions about an indexed document corpus and decide "
             "their intent and retrieval strategy before any search happens."
         ),
-        llm=llm,
+        llm=llm_factory(max_tokens=200),
         verbose=False,
         allow_delegation=False,
     )
@@ -26,7 +35,7 @@ def build_agents(llm: LLM | None = None) -> dict[str, Agent]:
             "You run hybrid (vector + lexical) search over the document index and can "
             "reformulate a query when the first pass doesn't find enough evidence."
         ),
-        llm=llm,
+        llm=llm_factory(max_tokens=200),
         verbose=False,
         allow_delegation=False,
     )
@@ -39,7 +48,7 @@ def build_agents(llm: LLM | None = None) -> dict[str, Agent]:
             "partially_supported, contradictory, or insufficient — never assume more "
             "coverage than what's actually in the passages."
         ),
-        llm=llm,
+        llm=llm_factory(max_tokens=350),
         verbose=False,
         allow_delegation=False,
     )
@@ -49,9 +58,10 @@ def build_agents(llm: LLM | None = None) -> dict[str, Agent]:
         goal="Write a grounded, cited answer strictly from approved evidence",
         backstory=(
             "You write answers exclusively from the evidence you're given, citing every "
-            "claim, and you never introduce outside knowledge."
+            "claim, and you never introduce outside knowledge. Be complete but not padded — "
+            "say what the evidence supports, plainly, without repeating yourself."
         ),
-        llm=llm,
+        llm=llm_factory(max_tokens=700),
         verbose=False,
         allow_delegation=False,
     )
@@ -61,9 +71,10 @@ def build_agents(llm: LLM | None = None) -> dict[str, Agent]:
         goal="Verify every claim is cited and score the answer's confidence",
         backstory=(
             "You are the last check before an answer reaches a user. You catch unsupported "
-            "claims and assign a defensible confidence score."
+            "claims and assign a defensible confidence score. You only rewrite the answer "
+            "when something is actually wrong with it — otherwise you leave it alone."
         ),
-        llm=llm,
+        llm=llm_factory(max_tokens=350),
         verbose=False,
         allow_delegation=False,
     )

@@ -32,6 +32,7 @@ to a retrieval-only response rather than crashing or inventing an answer.
 """
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 
@@ -46,11 +47,18 @@ from aegisrag.config.prompts import get_registry
 from aegisrag.config.settings import get_settings
 from aegisrag.guardrails import guardrails
 from aegisrag.guardrails.human_review import assess_risk, queue_for_review
+from aegisrag.retrieval.answer_cache import AnswerCache
 from aegisrag.retrieval.hybrid_retriever import HybridPGRetriever
 
 
 class ModelUnavailableError(Exception):
     """Raised when both the primary and fallback models fail for one call."""
+
+
+_GREETING_RE = re.compile(
+    r"^(hi|hello|hey|thanks|thank you|thx|good (morning|afternoon|evening)|ok|okay|cool|bye|goodbye)[\s!.,]*$",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -95,14 +103,15 @@ def _citations_from_nodes(nodes) -> list[Citation]:
 class AegisRAGOrchestrator:
     def __init__(self):
         self.settings = get_settings()
-        self.agents = build_agents(get_llm())
+        self.agents = build_agents(get_llm)
         self._fallback_agents: dict | None = None  # built lazily, only if ever needed
         self.prompts = get_registry()
         self.retriever = HybridPGRetriever(top_k=get_policy().retrieval.top_k)
+        self.cache = AnswerCache()
 
     def _get_fallback_agent(self, agent_key: str):
         if self._fallback_agents is None:
-            self._fallback_agents = build_agents(get_fallback_llm())
+            self._fallback_agents = build_agents(get_fallback_llm)
         return self._fallback_agents[agent_key]
 
     def _run_task(self, agent_key: str, prompt_name: str, trace_id: str, **prompt_vars) -> str:
@@ -172,7 +181,43 @@ class AegisRAGOrchestrator:
         )
         return raw
 
+    def _plan(self, query: str, trace_id: str) -> dict:
+        """Smart bypass (agent_policy.yaml): a document-QA system's queries almost always need
+        retrieval, and in every case observed during testing the LLM planner's sub_queries was
+        just [query] anyway — the only real decision is "is this a greeting, not a question".
+        A regex answers that in microseconds; skip the LLM call unless smart_bypass is off."""
+        policy = get_policy()
+        if policy.smart_bypass.enabled and policy.smart_bypass.planner_heuristic:
+            if _GREETING_RE.match(query.strip()):
+                write_event(AuditEvent(agent="planner", action="bypassed_heuristic_greeting", trace_id=trace_id))
+                return {"needs_retrieval": False, "sub_queries": []}
+            write_event(
+                AuditEvent(agent="planner", action="bypassed_heuristic_default_retrieval", trace_id=trace_id,
+                           output_data={"query": query[:200]})
+            )
+            return {"needs_retrieval": True, "sub_queries": [query]}
+
+        plan_raw = self._run_task("planner", "query_planner", trace_id, query=query)
+        return extract_json(plan_raw, fallback={"needs_retrieval": True, "sub_queries": [query]})
+
     def _evaluate_evidence(self, query: str, nodes, trace_id: str) -> dict:
+        policy = get_policy()
+        if policy.smart_bypass.enabled and nodes:
+            top_similarity = nodes[0].node.metadata.get("vector_similarity")
+            if top_similarity is not None and top_similarity >= policy.smart_bypass.evidence_similarity_threshold:
+                write_event(
+                    AuditEvent(agent="evidence_validator", action="bypassed_heuristic_high_similarity",
+                               trace_id=trace_id,
+                               output_data={"top_similarity": round(top_similarity, 4),
+                                            "threshold": policy.smart_bypass.evidence_similarity_threshold})
+                )
+                return {
+                    "verdict": "supported",
+                    "reasoning": f"heuristic bypass: top cosine similarity {top_similarity:.3f} >= "
+                                 f"threshold {policy.smart_bypass.evidence_similarity_threshold}",
+                    "usable_passage_ids": list(range(len(nodes))),
+                }
+
         passages_text = _passages_block(nodes)
         guardrails.check_retrieved_content([n.node.get_content() for n in nodes])
         eval_raw = self._run_task(
@@ -214,8 +259,26 @@ class AegisRAGOrchestrator:
                 status="declined", trace_id=trace_id,
             )
 
+        # SEMANTIC CACHE: a close-enough repeat/paraphrase of a past question skips retrieval
+        # and every agent LLM call entirely — the fastest possible answer is the one you don't
+        # have to compute. Only ever a hit against a genuinely-answered past result (see
+        # AnswerCache.store — abstains/pending-reviews/degraded answers are never cached).
+        if policy.answer_cache.enabled:
+            cached = self.cache.lookup(query, policy.answer_cache.similarity_threshold)
+            if cached is not None:
+                write_event(
+                    AuditEvent(agent="orchestrator", action="cache_hit", trace_id=trace_id,
+                               output_data={"similarity": round(cached.similarity, 4),
+                                            "source_trace_id": cached.source_trace_id,
+                                            "cache_id": cached.cache_id})
+                )
+                return AnswerResult(
+                    answer=cached.answer, confidence=cached.confidence, status=cached.status,
+                    citations=[Citation(**c) for c in cached.citations], trace_id=trace_id,
+                )
+
         try:
-            return self._answer_inner(query, trace_id, policy)
+            result = self._answer_inner(query, trace_id, policy)
         except ModelUnavailableError as exc:
             write_event(
                 AuditEvent(agent="orchestrator", action="model_unavailable", trace_id=trace_id,
@@ -230,10 +293,18 @@ class AegisRAGOrchestrator:
                 confidence=0.0, status="model_unavailable", trace_id=trace_id,
             )
 
+        if policy.answer_cache.enabled:
+            self.cache.store(
+                query=query, answer=result.answer, confidence=result.confidence,
+                status=result.status,
+                citations=[c.__dict__ for c in result.citations],
+                source_trace_id=result.trace_id,
+            )
+        return result
+
     def _answer_inner(self, query: str, trace_id: str, policy) -> AnswerResult:
         # PLAN
-        plan_raw = self._run_task("planner", "query_planner", trace_id, query=query)
-        plan = extract_json(plan_raw, fallback={"needs_retrieval": True, "sub_queries": [query]})
+        plan = self._plan(query, trace_id)
 
         if not plan.get("needs_retrieval", True):
             return AnswerResult(
@@ -298,14 +369,20 @@ class AegisRAGOrchestrator:
             "citation_quality", "citation_quality", trace_id,
             query=query, evidence=evidence_text, draft_answer=draft,
         )
-        quality = extract_json(quality_raw, fallback={"confidence": 0.5, "final_answer": draft})
+        quality = extract_json(quality_raw, fallback={"confidence": 0.5, "needs_correction": False})
         try:
             confidence = float(quality.get("confidence", 0.5))
         except (TypeError, ValueError):
             confidence = 0.5
-        final_answer = quality.get("final_answer", draft)
-        if not isinstance(final_answer, str):
-            final_answer = draft
+        # v1.1 contract (see prompts/validation/citation_quality.yaml): the model only writes
+        # corrected_answer when it actually changed something — saves regenerating the full
+        # answer text on every call, which was the single largest latency cost in the pipeline.
+        final_answer = draft
+        if quality.get("needs_correction") and isinstance(quality.get("corrected_answer"), str):
+            final_answer = quality["corrected_answer"]
+        elif isinstance(quality.get("final_answer"), str):
+            # backward-compat: tolerate a model that still returns the old key shape
+            final_answer = quality["final_answer"]
 
         citations = _citations_from_nodes(nodes)
 

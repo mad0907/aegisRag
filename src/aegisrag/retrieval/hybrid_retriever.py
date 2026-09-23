@@ -29,19 +29,21 @@ def _reciprocal_rank_fusion(
     return scores
 
 
-def _row_to_node(row, score: float) -> NodeWithScore:
+def _row_to_node(row, score: float, vector_similarity: float | None = None) -> NodeWithScore:
     chunk_id, document_id, source_file, section_path, page_no, content, status = row[:7]
-    node = TextNode(
-        text=content,
-        id_=str(chunk_id),
-        metadata={
-            "document_id": str(document_id),
-            "source_file": source_file,
-            "section_path": section_path,
-            "page_no": page_no,
-            "status": status,
-        },
-    )
+    metadata = {
+        "document_id": str(document_id),
+        "source_file": source_file,
+        "section_path": section_path,
+        "page_no": page_no,
+        "status": status,
+    }
+    if vector_similarity is not None:
+        # Raw cosine similarity, distinct from `score` (which may be an RRF-fused rank score) —
+        # this is the number the smart-bypass evidence check (§ agent_policy.yaml) reads to
+        # decide whether an LLM call is even needed. Only present when a vector search ran.
+        metadata["vector_similarity"] = vector_similarity
+    node = TextNode(text=content, id_=str(chunk_id), metadata=metadata)
     return NodeWithScore(node=node, score=score)
 
 
@@ -101,13 +103,17 @@ class HybridPGRetriever(BaseRetriever):
         by_id = {str(r[0]): r for r in vector_rows}
         for r in lexical_rows:
             by_id.setdefault(str(r[0]), r)
+        vector_similarity_by_id = {str(r[0]): float(r[7]) for r in vector_rows}
 
         vector_ids = [str(r[0]) for r in vector_rows]
         lexical_ids = [str(r[0]) for r in lexical_rows]
         fused = _reciprocal_rank_fusion(vector_ids, lexical_ids)
         ranked_ids = sorted(fused, key=fused.get, reverse=True)[: self._top_k]
 
-        return [_row_to_node(by_id[cid], fused[cid]) for cid in ranked_ids]
+        return [
+            _row_to_node(by_id[cid], fused[cid], vector_similarity_by_id.get(cid))
+            for cid in ranked_ids
+        ]
 
     def retrieve_lexical_only(self, query_str: str) -> list[NodeWithScore]:
         """Recovery strategy: drop the embedding step entirely — useful when the vector pass
@@ -131,8 +137,12 @@ class HybridPGRetriever(BaseRetriever):
         by_id = {str(r[0]): r for r in vector_rows}
         for r in lexical_rows:
             by_id.setdefault(str(r[0]), r)
+        vector_similarity_by_id = {str(r[0]): float(r[7]) for r in vector_rows}
         vector_ids = [str(r[0]) for r in vector_rows]
         lexical_ids = [str(r[0]) for r in lexical_rows]
         fused = _reciprocal_rank_fusion(vector_ids, lexical_ids)
         ranked_ids = sorted(fused, key=fused.get, reverse=True)[: self._top_k * 2]
-        return [_row_to_node(by_id[cid], fused[cid]) for cid in ranked_ids]
+        return [
+            _row_to_node(by_id[cid], fused[cid], vector_similarity_by_id.get(cid))
+            for cid in ranked_ids
+        ]

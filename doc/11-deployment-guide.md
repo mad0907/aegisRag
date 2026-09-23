@@ -19,9 +19,9 @@ make install         # venv (3.11) + deps + the ragas upstream-bug patch (see be
 cp .env.example .env
 make up               # docker compose: Postgres+PGVector, Phoenix, OpenWebUI
 make init-db           # applies schema.sql — idempotent, safe on a fresh or existing DB
-ollama pull qwen2.5:7b-instruct
+ollama pull llama3.2:3b     # the primary model (ADR-004) — small, fast, ~2x qwen's speed on CPU
+ollama pull qwen2.5:7b-instruct   # the fallback model — larger/slower, escalated to on failure
 ollama pull nomic-embed-text
-ollama pull llama3.2:3b     # the fallback model (ADR-004) — small, fast to pull
 make ingest             # Docling -> chunk -> embed -> PGVector, over data/knowledge_base/*.pdf
 make api                 # FastAPI on :8080 — leave running
 ```
@@ -47,7 +47,7 @@ question about the ingested corpus.
    same 5-agent pipeline as a real question — the first message in a new conversation costs
    roughly 2x the normal pipeline latency. Not fixed in this pass; the fix is to detect
    OpenWebUI's title-generation system prompt and short-circuit it before the full agent crew runs.
-5. **Two-GPU-model contention**: running the primary (`qwen2.5:7b-instruct`) and embedding
+5. **Two-GPU-model contention**: running the primary (`llama3.2:3b`) and embedding
    (`nomic-embed-text`) models, plus Docker containers, concurrently on 16GB unified memory works
    but leaves little headroom — expect noticeably slower responses if other memory-heavy
    applications are open at the same time.

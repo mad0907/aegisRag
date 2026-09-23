@@ -7,9 +7,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # Ollama
+    # Primary/fallback swapped 2026-09-23 for latency: llama3.2:3b measured ~2x faster
+    # generation than qwen2.5:7b-instruct on this CPU-only hardware (ADR-004 update), and was
+    # already proven against these exact prompts as the former fallback. qwen2.5:7b-instruct
+    # becomes the fallback -- a slower but more capable model to escalate to on failure, not
+    # for speed.
     ollama_base_url: str = "http://localhost:11434"
-    ollama_primary_model: str = "qwen2.5:7b-instruct"
-    ollama_fallback_model: str = "llama3.2:3b"
+    ollama_primary_model: str = "llama3.2:3b"
+    ollama_fallback_model: str = "qwen2.5:7b-instruct"
     ollama_embed_model: str = "nomic-embed-text"
 
     # Postgres / PGVector
